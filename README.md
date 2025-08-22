@@ -8,22 +8,12 @@ This project demonstrates how to build **dynamic, reproducible reports** with R 
 - Automated data cleaning and preprocessing.
 - Key sales KPIs:
   - Total revenue
+  - Total Orders
   - Average order value (AOV)
   - Active customers
   - Repeat purchase rate
+  - Return Rate
 - Monthly sales trend visualisation.
 - Top-selling and most-returned products.
 - Easily extendable to multiple markets.
 
----
-## 📂 Project Structure
-```plaintext
-.
-├── data/
-│   └── Online_Retail.csv       # Raw dataset
-├── reports/
-│   └── Sales_Report_UK.html    # Example output (UK)
-│   └── Sales_Report_France.html # Example output (France)
-├── scripts/
-│   └── sales_analysis.Rmd      # Main R Markdown file
-├── README.md    
