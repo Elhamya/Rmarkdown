@@ -1,77 +1,457 @@
 ---
-title: "Investment Report for Projects in `r params$country`"
-output: 
+title: "Online Retail Sales Dashboard – `r params$country`"
+author: "Ella Yazdi"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  pdf_document:
+    toc: true
   html_document:
-    css: styles.css
     toc: true
     toc_float: true
-date: "`r format(Sys.time(), '%d %B %Y')`"
+    number_sections: true
+    theme: flatly
+    highlight: tango
+    css: style.css
 params:
-  country: Brazil
-  year_start: 2017-07-01
-  year_end: 2018-06-30
-  fy: 2018
+  country: All
+  min_date: !r as.Date("2010-12-01")
+  max_date: !r as.Date("2011-12-09")
+  top_n: 10
 ---
+# 1. Introduction
 
-```{r setup, include = FALSE}
-knitr::opts_chunk$set(fig.align = 'center', echo = TRUE)
+This dashboard explores customer purchasing behavior using the **Online Retail Dataset**, which contains over 500,000 transactions from a UK-based online retailer between **December 2010 and December 2011**.  
+
+The analysis focuses on customers from **`r params$country`**, covering the time range from **`r params$min_date`** to **`r params$max_date`**.
+
+We aim to uncover key insights such as:
+
+- 💰 Total revenue and monthly sales trends  
+- 🎯 Customer repeat behavior and segmentation  
+- 📦 Best-selling and most returned products  
+- 🌍 Country-level sales and return patterns  
+
+# 2. Data Preparation (Load Packages, libraries and Raw Dataset)
+
+**Note**: Before knitting, ensure the following packages are installed:
+
+```{r setup, include=FALSE}
+# install.packages(c("readxl", "dplyr", "lubridate", "stringr", "patchwork"))
+knitr::opts_chunk$set(fig.align="center", echo = TRUE)
+
 ```
 
-```{r data, include = FALSE}
-library(readr)
+
+```{r load-libraries}
+
+library(readxl)
 library(dplyr)
+library(lubridate)
+library(stringr)
 library(ggplot2)
+library(knitr)
+library(scales)
+library(patchwork)  # for combining plots
+library(tidyr)
 
-investment_annual_summary <- read_csv("https://assets.datacamp.com/production/repositories/5756/datasets/d0251f26117bbcf0ea96ac276555b9003f4f7372/investment_annual_summary.csv")
-investment_services_projects <- read_csv("https://assets.datacamp.com/production/repositories/5756/datasets/bcb2e39ecbe521f4b414a21e35f7b8b5c50aec64/investment_services_projects.csv")
 ```
 
 
-## Datasets 
+```{r load-data, message=FALSE, warning=FALSE}
 
-### Investment Annual Summary
-The `investment_annual_summary` dataset provides a summary of the dollars in millions provided to each region for each fiscal year, from 2012 to 2018.
-```{r investment-annual-summary}
-ggplot(investment_annual_summary, aes(x = fiscal_year, y = dollars_in_millions, color = region)) +
-  geom_line() +
+
+retail_raw <- read_excel("Online_Retail.xlsx")
+
+```
+
+
+```{r preview-data}
+
+glimpse(retail_raw)
+
+```
+
+
+# 3. Data Cleaning and Feature Engineering
+
+```{r}
+
+retail <- retail_raw %>%
+  # Filter out bad rows
+  filter(!is.na(CustomerID), UnitPrice > 0) %>%
+
+  # Convert data types
+  mutate(
+    InvoiceNo = as.character(InvoiceNo),
+    StockCode = as.character(StockCode),
+    CustomerID = as.character(CustomerID),
+    
+    # Clean text fields
+    Description = str_trim(str_to_title(Description)),
+
+    # Create engineered features
+    transaction_type = ifelse(Quantity < 0 | str_detect(InvoiceNo, "^C"), "Return", "Sale"),
+    is_return = transaction_type == "Return",
+    totalprice = Quantity * UnitPrice,
+
+    # Extract date components
+    invoice_date = as.Date(InvoiceDate),
+    invoicemonth = floor_date(InvoiceDate, "month"),
+    year_month = format(InvoiceDate, "%Y-%m"),
+    weekday = factor(wday(InvoiceDate, label = TRUE), 
+                     levels = c("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"), 
+                     ordered = TRUE),
+    hour = hour(InvoiceDate)
+  )
+
+# Clean column names for consistency
+names(retail) <- names(retail) %>%
+  str_replace_all("\\s+", "_") %>%
+  tolower()
+
+```
+
+### 📌 Scope of Report
+
+**Time Frame**: `r format(params$min_date, "%B %d, %Y")` to `r format(params$max_date, "%B %d, %Y")`  
+**Country**: `r if (params$country == "All") "All Countries" else params$country`
+
+```{r scope}
+# Filter by date range
+retail <- retail %>%
+  filter(invoice_date >= params$min_date & invoice_date <= params$max_date)
+
+# Apply optional country filter
+retail_filtered <- if (params$country == "All") {
+  retail
+} else {
+  retail %>% filter(country == params$country)
+}
+
+# Separate sales and returns
+retail_sales <- retail_filtered %>% filter(!is_return)  # Filter only sales transactions
+retail_returns <- retail_filtered %>% filter(is_return)
+```
+
+# 4. Key Metrics 
+
+```{r Key Summary Metrics}
+# Filter only sales transactions
+retail_sales <- retail %>%
+  filter(!is_return)
+
+# Total Revenue
+total_revenue <- sum(retail_sales$totalprice, na.rm = TRUE)
+
+# Total Orders
+total_orders <- retail_sales %>% distinct(invoiceno) %>% nrow()
+
+# Average Order Value
+aov <- total_revenue / total_orders
+
+# Active Customers
+active_customers <- n_distinct(retail_sales$customerid)
+
+# Total Products Sold
+products_sold <- sum(retail_sales$quantity)
+
+# Repeat Purchase Rate
+repeat_customers <- retail_sales %>%
+  group_by(customerid) %>%
+  summarise(order_count = n_distinct(invoiceno)) %>%
+  filter(order_count > 1) %>%
+  nrow()
+
+repeat_rate <- repeat_customers / active_customers
+
+# Return Rate 
+return_rate <- mean(retail_filtered$is_return)
+```
+
+
+```{r}
+
+# Already done:
+# total_revenue, total_orders, aov, active_customers, repeat_rate, etc.
+
+kable(data.frame(
+  Metric = c("Total Revenue (£)", "Total Orders", "Average Order Value (£)", "Total Products Sold", "Active Customers", "Repeat Purchase Rate", "Return Rate"),
+    Value = c(
+    scales::comma(total_revenue),
+    total_orders,
+    round(aov, 2),
+    active_customers,
+    products_sold,
+    scales::percent(repeat_rate, accuracy = 0.1),
+    scales::percent(return_rate, accuracy = 0.1)
+
+  )
+), caption = "Overall Metrics (Entire Dataset)")
+
+```
+
+## Visual Insights
+
+### 1. Time Series Trends
+
+```{r Monthly Trends of Key Metrics, fig.width=12, fig.height=7, message = FALSE}
+
+monthly_metrics <- retail_filtered %>%
+  filter(!is.na(customerid)) %>%
+  group_by(invoicemonth) %>%
+  summarise(
+    total_revenue = sum(totalprice, na.rm = TRUE),
+    total_orders = n_distinct(invoiceno),
+    active_customers = n_distinct(customerid),
+    avg_order_value = total_revenue / total_orders,
+    avg_orders_per_customer = total_orders / active_customers,
+    .groups = "drop"
+  )
+
+
+# Choose metrics to compare
+metrics_long <- monthly_metrics %>%
+  pivot_longer(
+    cols = c(total_revenue, avg_order_value, avg_orders_per_customer, active_customers),
+    names_to = "Metric",
+    values_to = "scaled_value"
+  )
+
+# Faceted plot
+ggplot(metrics_long, aes(x = invoicemonth, y = scaled_value)) +
+  geom_line(color = "steelblue", size = 1.2) +
+  geom_point(size = 2) +
+  facet_wrap(~Metric, scales = "free_y") +
   labs(
-    title = "Investment Annual Summary",
-    x = "Fiscal Year",
-    y = "Dollars in Millions"
+    title = "Monthly Metrics Over Time",
+    x = "Month",
+    y = "Scaled Value (0–1)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+
+```{r Monthly Return Rate}
+
+monthly_returns <- retail %>%
+  group_by(invoicemonth) %>%
+  summarise(
+    total_transactions = n_distinct(invoiceno),
+    return_transactions = n_distinct(invoiceno[is_return]),
+    return_rate = return_transactions / total_transactions,
+    return_quantity = sum(abs(quantity[is_return]), na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+ggplot(monthly_returns, aes(x = invoicemonth, y = return_rate)) +
+  geom_line(color = "steelblue", size = 1.2) +
+  geom_point(color = "firebrick") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(
+    title = "Monthly Return Rate (%) Over Time",
+    x = "Month",
+    y = "Return Rate (%)"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{r Monthly Returned Quantity}
+
+ggplot(monthly_returns, aes(x = invoicemonth, y = return_quantity)) +
+  geom_line(color = "#AF7AC5", size = 1.2) +
+  geom_point(color = "black", size = 2) +
+  labs(title = "Monthly Returned Units",
+       x = "Month",
+       y = "Total Quantity Returned") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+### 2. Geographical Insights
+```{r Country-level revenue}
+
+country_sales <- retail %>%
+  group_by(country) %>%
+  summarise(revenue = sum(totalprice, na.rm = TRUE)) %>%
+  arrange(desc(revenue)) %>%
+  slice_head(n = params$top_n)
+
+
+ggplot(country_sales, aes(x = reorder(country, revenue), y = revenue)) +
+  geom_bar(stat = "identity", fill = "tomato") +
+  coord_flip() +  # flip coordinates to make it horizontal
+  labs(
+    title = paste("Top", params$top_n, "Countries by Revenue"),
+    x = "Country",
+    y = "Revenue (£)"
+  ) +
+  scale_y_continuous(labels = scales::label_comma()) +  # nicely format large numbers
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),  # center title
+    axis.text = element_text(size = 10)
   )
 ```
 
-### Investment Projects in `r params$country`
-The `investment_services_projects` dataset provides information about each investment project from 2012 to 2018. Information listed includes the project name, company name, sector, project status, and investment amounts. Projects that do not have an associated investment amount are excluded from the plot.
 
-```{r country-investment-projects}
-country_investment_projects <- investment_services_projects %>%
-  filter(country == params$country) 
+### 3. Product Insights
+```{r Product Performance}
 
-ggplot(country_investment_projects, aes(x = date_disclosed, y = total_investment, color = status)) +
-  geom_point() +
-  labs(
-    title = "Investment Services Projects",
-    x = "Date Disclosed",
-    y = "Total IFC Investment in Dollars in Millions"
+# Top-selling products by quantity sold (exclude returns)
+top_sales <- retail %>%
+  filter(!is_return) %>%
+  group_by(description) %>%
+  summarise(total_sold = sum(quantity, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(total_sold)) %>%
+  slice_head(n = params$top_n)
+
+# Most returned products by quantity returned
+top_returns <- retail %>%
+  filter(is_return) %>%
+  group_by(description) %>%
+  summarise(total_returned = abs(sum(quantity)), .groups = "drop") %>%
+  arrange(desc(total_returned)) %>%
+  slice_head(n = params$top_n)
+
+
+# Plot top-selling products
+plot_sales <- ggplot(top_sales, aes(x = reorder(description, total_sold), y = total_sold)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = total_sold), hjust = -0.1, size = 3) +
+  coord_flip() +
+  labs(title = paste("Top", params$top_n, "Selling Products"),
+       x = "Product",
+       y = "Quantity Sold") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Plot most returned products
+plot_returns <- ggplot(top_returns, aes(x = reorder(description, total_returned), y = total_returned)) +
+  geom_bar(stat = "identity", fill = "tomato") +
+  geom_text(aes(label = total_returned), hjust = -0.1, size = 3) +
+  coord_flip() +
+  labs(title = paste("Top", params$top_n, "Returned Products"),
+       x = "Product",
+       y = "Quantity Returned") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Combine plots side by side
+plot_sales + plot_returns
+
+```
+
+### 4. Customer Segmentation (RFM)
+
+```{r RFM Calculation and Segmentation}
+
+rfm_data <- retail %>%
+  filter(!is_return) %>%
+  group_by(customerid) %>%
+  summarise(
+    country = first(params$country),
+    recency = as.numeric(as.Date("2011-12-09") - max(invoicedate, na.rm = TRUE)),
+    frequency = n_distinct(invoiceno),
+    monetary = sum(totalprice, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+rfm_data <- rfm_data %>%
+  mutate(
+    r_score = ntile(-recency, 5),
+    f_score = ntile(frequency, 5),
+    m_score = ntile(monetary, 5),
+    rfm_score = paste0(r_score, f_score, m_score)
+  ) %>%
+  mutate(
+    segment = case_when(
+      r_score >= 4 & f_score >= 4 & m_score >= 4 ~ "Champions",
+      r_score >= 4 & f_score >= 3 ~ "Loyal Customers",
+      r_score >= 4 ~ "Potential Loyalists",
+      r_score == 3 ~ "Recent Customers",
+      r_score == 2 ~ "Customers Needing Attention",
+      r_score <= 2 & f_score >= 4 ~ "At Risk",
+      r_score <= 2 & f_score >= 2 ~ "Hibernating",
+      TRUE ~ "Others"
+    )
   )
 ```
 
-### Investment Projects in `r params$country` in `r params$fy`
-The `investment_services_projects` dataset was filtered below to focus on information about each investment project from the `r params$fy` fiscal year, and is referred to as `country_annual_investment_projects`. Projects that do not have an associated investment amount are excluded from the plot.
-```{r country-annual-investment-projects}
-country_annual_investment_projects <- investment_services_projects %>%
-  filter(country == params$country,
-         date_disclosed >= params$year_start,
-         date_disclosed <= params$year_end) 
 
-ggplot(country_annual_investment_projects, aes(x = date_disclosed, y = total_investment, color = status)) +
-  geom_point() +
-  labs(
-    title = "Investment Services Projects",
-    x = "Date Disclosed",
-    y = "Total IFC Investment in Dollars in Millions"
-  ) 
+```{r Distribution of Recency, Frequency, and Monetary}
+library(patchwork)
+
+p_recency <- ggplot(rfm_data, aes(x = recency)) +
+  geom_histogram(fill = "skyblue", bins = 30) +
+  labs(title = "Recency Distribution",
+       x = "Days Since Last Purchase",
+       y = "Number of Customers") +
+  theme_minimal()
+
+p_frequency <- ggplot(rfm_data, aes(x = frequency)) +
+  geom_histogram(fill = "orange", bins = 30) +
+  labs(title = "Frequency Distribution",
+       x = "Number of Purchases",
+       y = "Number of Customers") +
+  theme_minimal()
+
+p_monetary <- ggplot(rfm_data, aes(x = monetary)) +
+  geom_histogram(fill = "seagreen", bins = 30) +
+  labs(title = "Monetary Distribution",
+       x = "Total Purchase Value (£)",
+       y = "Number of Customers") +
+  theme_minimal()
+
+p_recency / p_frequency / p_monetary
+
 ```
 
 
+```{r Distribution of Customers by Segment}
+
+rfm_data %>%
+  count(segment) %>%
+  ggplot(aes(x = reorder(segment, -n), y = n, fill = segment)) +
+  geom_col() +
+  geom_text(aes(label = n), vjust = -0.5) +
+  labs(
+    title = "Distribution of Customers by RFM Segment",
+    x = "Segment",
+    y = "Number of Customers"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_brewer(palette = "Set2")
+```
+
+
+```{r Return Value by RFM Segment}
+
+retail_with_segment <- retail %>%
+  filter(is_return) %>%
+  inner_join(rfm_data, by = "customerid")
+
+return_value_by_segment <- retail_with_segment %>%
+  group_by(segment) %>%
+  summarise(
+    return_value = sum(abs(totalprice), na.rm = TRUE),
+    return_count = n(),
+    returned_qty = sum(abs(quantity))
+  ) %>%
+  arrange(desc(return_value))
+
+ggplot(return_value_by_segment, aes(x = reorder(segment, return_value), y = return_value)) +
+  geom_bar(stat = "identity", fill = "darkred") +
+  geom_text(aes(label = round(return_value, 2)), hjust = -0.1, size = 3) +
+  coord_flip() +
+  labs(title = "Monetary Value of Returns by RFM Segment",
+       x = "Customer Segment",
+       y = "Return Value (£)") +
+  theme_minimal()
+```
